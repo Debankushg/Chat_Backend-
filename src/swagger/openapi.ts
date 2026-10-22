@@ -17,6 +17,13 @@ const errorResponse = (description: string) => ({
   description,
   content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
 });
+const userIdQuery = {
+  name: "userId",
+  in: "query",
+  required: true,
+  description: "The requesting user",
+  schema: uuid,
+};
 const json = (schema: object) => ({ "application/json": { schema } });
 
 export const openApiSpec = {
@@ -30,6 +37,7 @@ export const openApiSpec = {
   tags: [
     { name: "Users" },
     { name: "Chats" },
+    { name: "Groups" },
     { name: "Messages" },
   ],
   paths: {
@@ -65,6 +73,141 @@ export const openApiSpec = {
             }),
           },
           "404": errorResponse("User not found"),
+        },
+      },
+    },
+    "/group/create": {
+      post: {
+        tags: ["Groups"],
+        summary: "Create a group chat",
+        description:
+          "The creator becomes the first admin. Once created, the group id works as a chatId in all `/chat/{chatId}/...` message endpoints.",
+        requestBody: {
+          required: true,
+          content: json({
+            type: "object",
+            required: ["creatorId", "name", "memberIds"],
+            properties: {
+              creatorId: uuid,
+              name: { type: "string", minLength: 1, maxLength: 100, example: "Project Team" },
+              memberIds: { type: "array", minItems: 1, maxItems: 255, items: uuid },
+            },
+          }),
+        },
+        responses: {
+          "201": { description: "Created", content: json({ $ref: "#/components/schemas/Group" }) },
+          "400": errorResponse("Validation failed"),
+          "404": errorResponse("A user was not found"),
+        },
+      },
+    },
+    "/group/{groupId}": {
+      get: {
+        tags: ["Groups"],
+        summary: "Get group details and members",
+        parameters: [uuidParam("groupId", "Group ID"), userIdQuery],
+        responses: {
+          "200": { description: "OK", content: json({ $ref: "#/components/schemas/Group" }) },
+          "400": errorResponse("Validation failed, or the id is a 1:1 chat"),
+          "403": errorResponse("Not a member of the group"),
+          "404": errorResponse("Group not found"),
+        },
+      },
+      patch: {
+        tags: ["Groups"],
+        summary: "Rename the group (admin only)",
+        parameters: [uuidParam("groupId", "Group ID")],
+        requestBody: {
+          required: true,
+          content: json({
+            type: "object",
+            required: ["userId", "name"],
+            properties: { userId: uuid, name: { type: "string", minLength: 1, maxLength: 100, example: "New name" } },
+          }),
+        },
+        responses: {
+          "200": { description: "OK", content: json({ $ref: "#/components/schemas/Group" }) },
+          "400": errorResponse("Validation failed"),
+          "403": errorResponse("Not a member, or not an admin"),
+          "404": errorResponse("Group not found"),
+        },
+      },
+      delete: {
+        tags: ["Groups"],
+        summary: "Delete the group (admin only)",
+        description: "Deletes the group, its members, and all its messages in Firestore. Cannot be undone.",
+        parameters: [uuidParam("groupId", "Group ID"), userIdQuery],
+        responses: {
+          "200": {
+            description: "OK",
+            content: json({ type: "object", properties: { groupId: uuid, deleted: { type: "boolean" } } }),
+          },
+          "403": errorResponse("Not a member, or not an admin"),
+          "404": errorResponse("Group not found"),
+        },
+      },
+    },
+    "/group/{groupId}/members": {
+      post: {
+        tags: ["Groups"],
+        summary: "Add a member (admin only)",
+        parameters: [uuidParam("groupId", "Group ID")],
+        requestBody: {
+          required: true,
+          content: json({
+            type: "object",
+            required: ["userId", "memberId"],
+            properties: { userId: { ...uuid, description: "The admin making the request" }, memberId: uuid },
+          }),
+        },
+        responses: {
+          "201": { description: "Added", content: json({ $ref: "#/components/schemas/Group" }) },
+          "400": errorResponse("Validation failed, or group is full"),
+          "403": errorResponse("Not a member, or not an admin"),
+          "404": errorResponse("Group or user not found"),
+          "409": errorResponse("User is already a member"),
+        },
+      },
+    },
+    "/group/{groupId}/members/{memberId}": {
+      delete: {
+        tags: ["Groups"],
+        summary: "Remove a member, or leave the group",
+        description:
+          "Admins can remove anyone. A member can remove only themself (`memberId` = `userId`). The last admin cannot leave.",
+        parameters: [uuidParam("groupId", "Group ID"), uuidParam("memberId", "Member to remove"), userIdQuery],
+        responses: {
+          "200": {
+            description: "OK",
+            content: json({
+              type: "object",
+              properties: { groupId: uuid, memberId: uuid, removed: { type: "boolean" } },
+            }),
+          },
+          "400": errorResponse("Last admin cannot leave"),
+          "403": errorResponse("Not allowed to remove this member"),
+          "404": errorResponse("Group or member not found"),
+        },
+      },
+    },
+    "/group/{groupId}/members/{memberId}/role": {
+      patch: {
+        tags: ["Groups"],
+        summary: "Change a member's role (admin only)",
+        parameters: [uuidParam("groupId", "Group ID"), uuidParam("memberId", "Member to change")],
+        requestBody: {
+          required: true,
+          content: json({
+            type: "object",
+            required: ["userId", "role"],
+            properties: { userId: uuid, role: { type: "string", enum: ["admin", "member"] } },
+          }),
+        },
+        responses: {
+          "200": { description: "OK", content: json({ $ref: "#/components/schemas/Group" }) },
+          "400": errorResponse("Validation failed, or last admin cannot be demoted"),
+          "403": errorResponse("Not a member, or not an admin"),
+          "404": errorResponse("Group or member not found"),
         },
       },
     },
@@ -231,10 +374,34 @@ export const openApiSpec = {
         type: "object",
         properties: { id: uuid, name: { type: "string" }, createdAt: { type: "string", format: "date-time" } },
       },
+      Group: {
+        type: "object",
+        properties: {
+          id: uuid,
+          name: { type: "string" },
+          createdBy: { ...uuid, nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time", nullable: true },
+          members: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                userId: uuid,
+                name: { type: "string" },
+                role: { type: "string", enum: ["admin", "member"] },
+                joinedAt: { type: "string", format: "date-time" },
+              },
+            },
+          },
+        },
+      },
       Chat: {
         type: "object",
         properties: {
           id: uuid,
+          type: { type: "string", enum: ["direct", "group"] },
+          name: { type: "string", nullable: true, description: "Group name; null for 1:1 chats" },
           memberIds: { type: "array", items: uuid },
           createdAt: { type: "string", format: "date-time" },
         },

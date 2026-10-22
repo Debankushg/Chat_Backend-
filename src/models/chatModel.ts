@@ -48,6 +48,8 @@ export async function isMember(chatId: string, userId: string): Promise<boolean>
 export async function findChatsByUser(userId: string): Promise<ChatSummary[]> {
   const { rows } = await pool.query<ChatSummary>(
     `SELECT c.id,
+            c.type,
+            c.name,
             c.created_at AS "createdAt",
             array_agg(m.user_id ORDER BY m.user_id) AS "memberIds"
        FROM chats c

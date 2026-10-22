@@ -136,3 +136,8 @@ export async function setLastSeen(chatId: string, userId: string, messageId: str
     return { status: "ok", messageId, updated: true };
   });
 }
+
+/** Deletes the chat's Firestore document and every subcollection (messages, lastSeen). */
+export async function deleteChatData(chatId: string): Promise<void> {
+  await firestore.recursiveDelete(firestore.collection("chats").doc(chatId));
+}

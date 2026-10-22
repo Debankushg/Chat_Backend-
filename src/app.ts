@@ -1,7 +1,7 @@
 import express from "express";
 import swaggerUi from "swagger-ui-express";
 import routes from "./routes";
-import { openApiSpec } from "./docs/openapi";
+import { openApiSpec } from "./swagger/openapi";
 import { errorHandler, notFound } from "./middleware/errorHandler";
 
 export const app = express();
